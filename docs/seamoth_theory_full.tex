@@ -1,0 +1,1298 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{siunitx}
+\usepackage{float}
+\usepackage{titlesec}
+\usepackage{parskip}
+
+\hypersetup{colorlinks=true, linkcolor=blue!70!black, urlcolor=blue!70!black, citecolor=blue!70!black}
+
+\pagestyle{fancy}
+\fancyhead[L]{\small\textit{SEAMOTH Glide Theory}}
+\fancyhead[R]{\small\textit{Middle-Aged Engineering}}
+\fancyfoot[C]{\thepage}
+
+\newcommand{\seamoth}{\textsc{Seamoth}}
+\newcommand{\half}{\tfrac{1}{2}}
+\newcommand{\vect}[1]{\bm{#1}}
+\newcommand{\mat}[1]{\mathbf{#1}}
+\newcommand{\deriv}[2]{\frac{\mathrm{d}#1}{\mathrm{d}#2}}
+\newcommand{\pderiv}[2]{\frac{\partial #1}{\partial #2}}
+
+\newcommand{\note}[1]{\par\smallskip\noindent\colorbox{blue!8}{\parbox{\dimexpr\linewidth-2\fboxsep}{%
+  \small\textbf{SEAMOTH:} #1}}\smallskip}
+
+\newcommand{\insight}[1]{\par\smallskip\noindent\colorbox{green!8}{\parbox{\dimexpr\linewidth-2\fboxsep}{%
+  \small\textbf{Physical insight:} #1}}\smallskip}
+
+\newcommand{\warning}[1]{\par\smallskip\noindent\colorbox{red!8}{\parbox{\dimexpr\linewidth-2\fboxsep}{%
+  \small\textbf{Warning:} #1}}\smallskip}
+
+\title{\vspace{-1cm}\textbf{Underwater Glider Theory\\for the \seamoth{} Project}\\[8pt]
+\large A comprehensive technical reference following Graver (2005),\\
+applied to a shallow-water vectored-buoyancy-control glider}
+\author{Middle-Aged Engineering}
+\date{March 2026 \quad---\quad v0.1}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document extracts and explains every piece of theory from Graver's
+\emph{Underwater Gliders: Dynamics, Control and Design} (Princeton, 2005) that is
+relevant to the \seamoth{} v1 reef-survey glider.  It is intended to be read
+as a self-contained tutorial: we derive the equations from first principles, explain
+the physical intuition behind each result, and plug in \seamoth{} parameters throughout
+so the reader can cross-check every number against the companion Jupyter notebook.
+Where Graver's framework does not cover \seamoth{}'s unique features (notably the
+4-bladder vectored buoyancy control), we note the gap and describe how to extend
+the theory.
+
+This is \emph{not} a summary of the dissertation.  It is a guided tour through the
+parts that matter for designing, building, and flying our glider, written so that
+a team member with undergraduate-level mechanics and fluid dynamics can follow every step.
+
+Cross-references to Graver are given as (G-\S$n$) for section $n$ and (G-Eq.$\,m$) for
+equation $m$.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%======================================================================
+%  PART I: FOUNDATIONS
+%======================================================================
+\part{Foundations}
+
+%----------------------------------------------------------------------
+\section{What is an underwater glider?}
+\label{sec:intro}
+%----------------------------------------------------------------------
+
+An underwater glider is an autonomous vehicle that moves through the ocean by
+controlling its buoyancy.  It has no propeller.  Wings convert the resulting vertical
+motion (sinking or rising) into forward glide, exactly like a sailplane---except
+the vehicle is designed to be neutrally buoyant in a fluid 800 times denser than air.
+
+The flight cycle is a sawtooth: the vehicle makes itself heavy (negative buoyancy),
+glides downward and forward, then makes itself light (positive buoyancy) and glides
+upward and forward.  At the surface it gets a GPS fix and communicates; then it dives
+again.
+
+\seamoth{} differs from conventional gliders (Slocum, Spray, Seaglider) in three ways:
+\begin{enumerate}[nosep]
+  \item \textbf{Vectored buoyancy control (VBC):} four independent bladders instead
+    of one, providing pitch \emph{and} roll authority without a sliding internal mass.
+  \item \textbf{Shallow water:} 5--30\,m operating depth, versus 200--1500\,m for
+    ocean gliders.  This means higher cycling frequency and different energy trade-offs.
+  \item \textbf{Agility:} target turning radius $<$5\,m and pitch transitions $<$5\,s,
+    versus minutes for ocean gliders.
+\end{enumerate}
+
+The theory in this document applies to all buoyancy-driven gliders.  We note
+where \seamoth{}'s VBC architecture requires extensions beyond Graver's single-bladder model.
+
+
+%----------------------------------------------------------------------
+\section{Coordinate frames and kinematics}
+\label{sec:kinematics}
+%----------------------------------------------------------------------
+
+Three reference frames are needed to describe glider motion (G-\S3.1).
+
+\subsection{Inertial frame}
+
+An earth-fixed frame with orthogonal axes $(x,y,z)$ and unit vectors
+$(\vect{i},\vect{j},\vect{k})$.  The $x$-$y$ plane is horizontal; the $z$-axis
+points \emph{downward} (positive $z$ = increasing depth).  This is the standard
+convention in marine vehicle dynamics.
+
+\warning{The $z$-down convention means that ``going up'' is \emph{negative}~$\dot{z}$.
+This catches people who are used to aerospace $z$-up frames.  Our IEKF and MPC firmware
+must use the same convention consistently.}
+
+\subsection{Body frame}
+
+A frame fixed to the glider with its origin at the \textbf{centre of buoyancy} (CB)
+and axes aligned with the vehicle's principal axes:
+\begin{itemize}[nosep]
+  \item $e_1$: forward (nose direction),
+  \item $e_2$: to the right (starboard wing),
+  \item $e_3$: downward (through the belly).
+\end{itemize}
+
+The orientation of the body frame relative to the inertial frame is described by the
+rotation matrix $\mat{R}$, parameterized by three Euler angles in the standard
+yaw--pitch--roll (ZYX) convention:
+\begin{align}
+  \psi &\quad\text{yaw (heading), positive clockwise from above}, \\
+  \theta &\quad\text{pitch, positive nose-up}, \\
+  \phi &\quad\text{roll, positive right-wing-down}.
+\end{align}
+
+The kinematic equations are (G-Eq.\,3.1--3.2):
+\begin{align}
+  \dot{\mat{R}} &= \mat{R}\,\hat{\vect{\Omega}}, \label{eq:Rdot} \\
+  \dot{\vect{b}} &= \mat{R}\,\vect{v}, \label{eq:bdot}
+\end{align}
+where $\vect{b}=(x,y,z)^T$ is the glider position, $\vect{v}=(v_1,v_2,v_3)^T$ is the
+translational velocity in the body frame, $\vect{\Omega}=(\Omega_1,\Omega_2,\Omega_3)^T$
+is the angular velocity in the body frame, and $\hat{\cdot}$ denotes the skew-symmetric
+matrix representing a cross product:
+\begin{equation}
+  \hat{\vect{x}} = \begin{pmatrix} 0 & -x_3 & x_2 \\ x_3 & 0 & -x_1 \\ -x_2 & x_1 & 0 \end{pmatrix}
+  \quad\text{so that}\quad \hat{\vect{x}}\,\vect{y} = \vect{x}\times\vect{y}.
+\end{equation}
+
+\subsection{Wind frame}
+
+The wind frame tracks the glider's velocity \emph{relative to the water},
+$\vect{v}_r$.  In the absence of currents, $\vect{v}_r = \vect{v}$.
+Its orientation relative to the body frame is described by two
+\textbf{aerodynamic angles} (G-\S3.1.3):
+
+\begin{align}
+  \alpha &= \arctan\!\left(\frac{v_{r3}}{v_{r1}}\right)
+    &&\text{angle of attack}, \label{eq:aoa} \\
+  \beta  &= \arctan\!\left(\frac{v_{r2}}{|\vect{v}_r|}\right)
+    &&\text{sideslip angle}. \label{eq:sideslip}
+\end{align}
+
+\insight{The angle of attack $\alpha$ is the angle between the glider's nose ($e_1$)
+and its actual direction of travel through the water.  It is the wing's ``working angle''---the
+parameter that determines how much lift the wing generates.  Sideslip $\beta$ is the
+lateral equivalent: nonzero $\beta$ means the glider is ``crabbing'' sideways through the water.}
+
+\subsection{The glide-path angle $\xi$}
+\label{sec:xi}
+
+The \textbf{glide-path angle} is the angle of the velocity vector relative to the
+horizontal:
+\begin{equation}
+  \xi = \theta - \alpha.
+  \label{eq:xi}
+\end{equation}
+
+Graver's sign convention: $\xi < 0$ for a downward glide, $\xi > 0$ for an upward glide.
+
+\warning{Throughout this document and in the Jupyter notebook, we quote $\xi$ as a
+positive number in degrees (e.g.\ ``$\xi=15°$'' meaning $15°$ below horizontal).
+The equilibrium solver converts to Graver's convention internally.  Always check which
+convention a particular function expects.}
+
+\subsection{Currents}
+
+In the presence of a current $\vect{V}_c$ (expressed in the inertial frame), the
+velocity relative to the water is:
+\begin{equation}
+  \vect{v}_r = \vect{v} - \mat{R}^T \vect{V}_c.
+  \label{eq:vr}
+\end{equation}
+
+All hydrodynamic forces depend on $\vect{v}_r$, not $\vect{v}$.  For equilibrium
+analysis we assume still water ($\vect{V}_c=\vect{0}$), but in the Arabian Gulf
+tidal currents of 0.1--0.3\,m/s are significant relative to our 0.5\,m/s glide speed.
+The IEKF must estimate current as a slowly-varying state.
+
+
+%----------------------------------------------------------------------
+\section{The vehicle model}
+\label{sec:vehicle}
+%----------------------------------------------------------------------
+
+\subsection{Mass decomposition}
+
+Graver decomposes the glider mass into several components (G-\S3.2.1):
+
+\begin{description}[nosep]
+  \item[$m_h$:] Hull mass (uniformly distributed structural mass).
+  \item[$\bar{m}$:] Movable point mass (the sliding battery pack that controls
+    pitch and roll in conventional gliders).
+  \item[$m_b$:] Variable ballast mass (the oil pumped in/out to change buoyancy),
+    located at CB.
+  \item[$m_w$:] Static offset mass (accounts for non-uniform weight distribution).
+  \item[$m_s$:] Stationary mass: $m_s = m_h + m_w + m_b$.
+  \item[$m_v$:] Total vehicle mass: $m_v = m_s + \bar{m}$.
+  \item[$m$:] Mass of displaced water: $m = \rho\,V_d$ where $V_d$ is the
+    displaced volume.
+  \item[$m_0$:] \textbf{Excess mass}: $m_0 = m_v - m$.
+\end{description}
+
+The excess mass $m_0$ is the key control variable.  When $m_0 > 0$ the glider is
+heavier than the water it displaces and sinks; when $m_0 < 0$ it rises.  The buoyancy
+engine controls $m_0$ by moving oil between an internal reservoir and external bladders,
+changing the vehicle's displaced volume $V_d$ without changing its actual mass $m_v$.
+
+\insight{This is a subtle but important point.  The pump doesn't add or remove mass
+from the vehicle---it changes the vehicle's \emph{volume}.  Pumping oil into the external
+bladders makes the vehicle effectively larger (more water displaced $\rightarrow$ $m$
+increases $\rightarrow$ $m_0$ decreases $\rightarrow$ more buoyant).  Retracting oil
+makes the vehicle smaller and heavier.}
+
+\note{\seamoth{} parameters: $m_v\approx8.5$\,kg, $V_d\approx8.3$\,L,
+$m=\rho V_d=1023\times0.0083\approx8.49$\,kg.  At neutral trim $m_0\approx0$.
+The buoyancy engine can vary $V_d$ by $\pm160$\,mL, giving a maximum
+$|m_0|\approx\rho\times160\times10^{-6}\approx0.164$\,kg.  In the notebook, $m_0$
+is input directly in kg.}
+
+\subsection{Application to \seamoth{} VBC}
+
+\seamoth{} does \emph{not} have a sliding mass $\bar{m}$.  Instead, four independent
+bladders provide both buoyancy control and attitude control:
+
+\begin{itemize}[nosep]
+  \item \textbf{Pitch:} inflate forward bladders while deflating aft bladders (or vice
+    versa).  This shifts the centre of buoyancy (CB) forward or aft of the centre of
+    gravity (CG), creating a pitch moment.
+  \item \textbf{Roll:} inflate port bladders while deflating starboard bladders.
+    This shifts CB laterally, creating a roll moment.
+  \item \textbf{Net buoyancy:} inflate or deflate all bladders together to change $m_0$.
+\end{itemize}
+
+Graver's model uses a single $m_0$ for net buoyancy and a sliding mass position
+$\vect{r}_p$ for attitude control.  For \seamoth{}, we can map the 4-bladder state
+into equivalent $m_0$ (total) and equivalent CB shift (attitude), but the detailed
+dynamics of VBC are beyond Graver's framework.  The ReefGlider paper (Galloway et al.,
+2024) provides the VBC-specific theory.
+
+For the purpose of \emph{steady-state} analysis (which is what this document covers),
+the VBC vs.\ sliding-mass distinction does not matter: at equilibrium, all that matters
+is the total $m_0$ and the resulting pitch angle $\theta$.
+
+
+%----------------------------------------------------------------------
+\section{Forces: gravity, buoyancy, and hydrodynamics}
+\label{sec:forces}
+%----------------------------------------------------------------------
+
+\subsection{Gravity and buoyancy}
+
+The gravitational force on the vehicle is $m_v\,g$ downward.  The buoyancy force is
+$m\,g = \rho\,V_d\,g$ upward.  The \emph{net} gravitational--buoyancy force is:
+\begin{equation}
+  F_\text{net} = m_0\,g = (m_v - m)\,g,
+  \label{eq:Fnet}
+\end{equation}
+acting downward when $m_0>0$ (negative buoyancy).
+
+In the body frame, this force has components that depend on the pitch angle $\theta$:
+\begin{equation}
+  \vect{F}_\text{grav,body} = m_0\,g\begin{pmatrix} -\sin\theta \\ 0 \\ \cos\theta \end{pmatrix}.
+  \label{eq:Fgrav_body}
+\end{equation}
+
+\insight{When the glider pitches nose-down ($\theta<0$ for a downward glide), the
+$e_1$ component of gravity is \emph{positive} (forward)---this is what drives the glide.
+The $e_3$ component pushes the glider ``down'' in the body frame, which is resisted by lift.}
+
+\subsection{Hydrodynamic forces}
+
+The fluid exerts forces and moments on the glider.  These are decomposed into
+(G-\S3.2.7):
+
+\begin{description}[nosep]
+  \item[Lift $L$:] Force perpendicular to $\vect{v}_r$ (in the $e_1$-$e_3$ plane),
+    directed from the belly toward the back of the glider.
+  \item[Drag $D$:] Force opposing $\vect{v}_r$.
+  \item[Side force $SF$:] Force perpendicular to $\vect{v}_r$ in the lateral direction
+    (zero in symmetric flight).
+  \item[Moments:] Pitch moment $M$, roll moment $\mathcal{L}$, yaw moment $N$.
+\end{description}
+
+In addition to these ``viscous'' forces, the dense fluid creates \textbf{added mass}
+effects: accelerating through water requires accelerating the surrounding fluid as well.
+The added mass matrix $\mat{M}_f$ and added inertia matrix $\mat{J}_f$ appear in the
+full equations of motion (G-\S3.2.3).  At steady state (constant velocity and angular
+velocity), added mass terms vanish---they only matter during transients like inflections.
+
+\subsection{Quasi-steady hydrodynamic model}
+
+For steady-state analysis, Graver uses a coefficient-based model where lift, drag,
+and moment are functions of the instantaneous angle of attack $\alpha$ and speed $V$:
+\begin{align}
+  L &= \half\rho\,V_r^2\,S\,C_L(\alpha), \label{eq:L} \\
+  D &= \half\rho\,V_r^2\,S\,C_D(\alpha), \label{eq:D} \\
+  M &= \half\rho\,V_r^2\,S\,c\,C_M(\alpha), \label{eq:M}
+\end{align}
+where $S$ is the wing reference area, $c$ is the wing chord, and $V_r = |\vect{v}_r|$.
+
+The coefficient models are:
+\begin{align}
+  C_L &= C_{L0} + C_{L\alpha}\,\alpha, \label{eq:CL} \\
+  C_D &= C_{D0} + C_{D\alpha}\,\alpha^2, \label{eq:CD} \\
+  C_M &= C_{M0} + C_{M\alpha}\,\alpha. \label{eq:CM}
+\end{align}
+
+These are the simplest polynomial fits that capture the essential physics: lift increases
+linearly with $\alpha$ (until stall), drag has a quadratic ``drag bucket'' centred near
+$\alpha=0$, and the pitch moment is approximately linear in $\alpha$.
+
+
+%======================================================================
+%  PART II: BUILDING THE HYDRODYNAMIC MODEL
+%======================================================================
+\part{Building the Hydrodynamic Model for \seamoth{}}
+
+%----------------------------------------------------------------------
+\section{Lift model}
+\label{sec:lift}
+%----------------------------------------------------------------------
+
+\subsection{2D airfoil data}
+
+The SD7003 airfoil (Selig, UIUC) was designed for low Reynolds number applications
+and has extensive wind-tunnel data at $\mathrm{Re}=40{,}000$--$200{,}000$.
+At our operating Reynolds numbers ($\sim$40k--60k), the key parameters are:
+
+\begin{itemize}[nosep]
+  \item 2D lift-curve slope: $C_{l\alpha,\text{2D}} \approx 6.2\;\mathrm{rad}^{-1}$
+    (close to thin-airfoil theory's $2\pi\approx6.28$, slightly reduced by viscous effects).
+  \item Zero-$\alpha$ lift: $C_{l0,\text{2D}} \approx 0.15$ (due to the airfoil's camber).
+  \item Maximum $C_l$ before stall: $\sim$0.9 at $\alpha\approx8$--$9°$ (Re\,50k).
+\end{itemize}
+
+\subsection{Finite wing correction}
+
+A real wing of finite span generates tip vortices that reduce the effective angle of
+attack and the lift-curve slope.  The Prandtl lifting-line correction
+gives (G-\S3.2.7):
+\begin{equation}
+  C_{L\alpha,\text{3D}} = C_{l\alpha,\text{2D}}\;\frac{\mathrm{AR}}{\mathrm{AR}+2},
+  \label{eq:CLa3d}
+\end{equation}
+where $\mathrm{AR}=b^2/S$ is the aspect ratio ($b$ = wingspan).
+
+\insight{The factor $\mathrm{AR}/(\mathrm{AR}+2)$ is an approximation of the exact
+Prandtl result, valid for wings with elliptic or near-elliptic loading.  For
+$\mathrm{AR}=6$, it gives 75\% of the 2D value.  Higher AR $\rightarrow$ less tip
+loss $\rightarrow$ more lift per radian of $\alpha$.  This is why sailplanes have
+long, slender wings.}
+
+\subsection{Hull lift contribution}
+
+The glider hull (a slender body of revolution) contributes additional lift through
+a combination of crossflow force and interference effects with the wing.  Graver
+accounts for this with a multiplicative factor (G-\S5.2.1):
+\begin{equation}
+  C_{L\alpha} = C_{L\alpha,\text{3D}} \times k_h,
+  \label{eq:CLa_total}
+\end{equation}
+where $k_h \approx 1.05$--$1.15$ depending on hull fineness ratio and wing position.
+
+\note{$C_{l\alpha,\text{2D}}=6.2$, $\mathrm{AR}=6$, $k_h=1.10$:
+\begin{align*}
+  C_{L\alpha,\text{3D}} &= 6.2 \times \frac{6}{6+2} = 6.2 \times 0.75 = 4.65\;\mathrm{rad}^{-1}, \\
+  C_{L\alpha} &= 4.65 \times 1.10 = \mathbf{5.115}\;\mathrm{rad}^{-1}.
+\end{align*}
+$C_{L0} = 0.15$ (assumed unchanged by finite-wing effects, as camber lift is primarily 2D).}
+
+
+%----------------------------------------------------------------------
+\section{Drag model}
+\label{sec:drag}
+%----------------------------------------------------------------------
+
+The total drag coefficient (referenced to wing area $S$) is the sum of several
+components:
+\begin{equation}
+  C_D = \underbrace{C_{D0}}_{\text{parasitic}} + \underbrace{C_{D\alpha}\,\alpha^2}_{\text{induced}}.
+  \label{eq:CDtotal}
+\end{equation}
+
+\subsection{Parasitic drag $C_{D0}$}
+
+This is all drag at zero lift (or more precisely, at $\alpha=0$).  It includes:
+
+\paragraph{Hull drag.}
+The hull is a bluff body.  Its drag coefficient is typically referenced to
+\emph{frontal area} $A_f$:
+\begin{equation}
+  D_\text{hull} = \half\rho\,V^2\,A_f\,C_{d,\text{hull}}.
+\end{equation}
+To reference this to wing area $S$, multiply by $A_f/S$:
+\begin{equation}
+  C_{D0,\text{hull}} = C_{d,\text{hull}}\;\frac{A_f}{S}.
+  \label{eq:cd0hull}
+\end{equation}
+
+The hull $C_d$ depends strongly on the nose shape, tail fairing, and surface finish.
+A bare cylinder has $C_d\approx0.8$--$1.0$; a well-faired torpedo shape can achieve
+$C_d\approx0.04$--$0.08$.  Our 4'' BlueRobotics tube with a moulded nose cone and
+tail fairing is estimated at $C_d\approx0.11$.
+
+\warning{The hull frontal area must use the \emph{outer} diameter (114.3\,mm), not the
+inner diameter ($\sim$100\,mm).  The O-ring flanges and end caps may add additional
+frontal area.  This was the source of the error in our original spec document.}
+
+\note{$A_f = \pi/4 \times 0.1143^2 = 102.6\;\mathrm{cm}^2 = 0.01026\;\mathrm{m}^2$.\\
+$C_{D0,\text{hull}} = 0.11 \times (0.01026/0.030) = 0.11 \times 0.342 = \mathbf{0.0376}$.}
+
+\paragraph{Wing profile drag.}
+The wing's own friction and pressure drag at zero lift.  From SD7003 wind tunnel data
+at Re\,50k: $C_{d0,\text{wing}} \approx 0.025$.
+
+\paragraph{Appendage drag.}
+Tail surfaces, antenna mast, fairings, cable penetrators, and any other protuberances.
+Estimated as $C_{d,\text{app}} \approx 0.008$ (referenced to $S$).
+
+\paragraph{Total parasitic drag.}
+\begin{equation}
+  C_{D0} = C_{D0,\text{hull}} + C_{d0,\text{wing}} + C_{d,\text{app}}.
+  \label{eq:CD0total}
+\end{equation}
+
+\note{$C_{D0} = 0.0376 + 0.025 + 0.008 = \mathbf{0.0706}$.\\
+The hull contributes 53\% of total parasitic drag---this is the single biggest drag source
+on the vehicle and the primary target for aerodynamic improvement.}
+
+\subsection{Induced drag $C_{D\alpha}$}
+
+When the wing generates lift, it also generates lift-induced drag through the tip
+vortex system.  From lifting-line theory with Oswald span efficiency factor $e$:
+\begin{equation}
+  C_{Di} = \frac{C_L^2}{\pi\,\mathrm{AR}\,e}.
+  \label{eq:CDi}
+\end{equation}
+
+For the drag polar $C_D = C_{D0} + C_{D\alpha}\alpha^2$, we substitute
+$C_L \approx C_{L\alpha}\alpha$ (ignoring $C_{L0}$ for the $\alpha$-dependent term):
+\begin{equation}
+  C_{D\alpha} = \frac{C_{L\alpha}^2}{\pi\,\mathrm{AR}\,e}.
+  \label{eq:CDalpha}
+\end{equation}
+
+\note{$C_{D\alpha} = 5.115^2 / (\pi \times 6 \times 0.85) = 26.16/16.02 = \mathbf{1.633}\;\mathrm{rad}^{-2}$.}
+
+\subsection{Drag breakdown at operating conditions}
+
+At a typical operating point ($V=0.53$\,m/s, $\alpha=1.3°=0.023$\,rad):
+\begin{align*}
+  q &= \half\times1023\times0.53^2 = 143.7\;\text{Pa}, \\
+  D_\text{hull} &= 143.7\times0.01026\times0.11 = 0.162\;\text{N} \quad(53\%), \\
+  D_\text{wing,profile} &= 143.7\times0.030\times0.025 = 0.108\;\text{N} \quad(35\%), \\
+  D_\text{wing,induced} &= 143.7\times0.030\times1.633\times0.023^2 = 0.004\;\text{N} \quad(1\%), \\
+  D_\text{appendages} &= 143.7\times0.030\times0.008 = 0.035\;\text{N} \quad(11\%), \\
+  D_\text{total} &= 0.308\;\text{N}.
+\end{align*}
+
+\insight{At our low angles of attack, induced drag is negligible (only 1\% of total).
+This is very different from sailplanes, where induced drag dominates.  The reason is
+simple: at $\alpha=1.3°$, the wing barely generates any lift.  The hull's parasitic drag
+overwhelms everything else.  This means that wing AR and Oswald efficiency are
+\emph{not} critical design parameters for \seamoth{}---hull fairing is far more important.}
+
+
+%----------------------------------------------------------------------
+\section{Graver's lumped $K$ parameters}
+\label{sec:Kparams}
+%----------------------------------------------------------------------
+
+To simplify the equilibrium equations, Graver defines four lumped parameters that
+absorb the dynamic-pressure-times-area product (G-Eq.\,4.14--4.16):
+\begin{align}
+  K_{D0} &= \half\rho\,S\,C_{D0}, &
+  K_D    &= \half\rho\,S\,C_{D\alpha}, \label{eq:KDdef} \\
+  K_{L0} &= \half\rho\,S\,C_{L0}, &
+  K_L    &= \half\rho\,S\,C_{L\alpha}. \label{eq:KLdef}
+\end{align}
+
+These have units of $\mathrm{N\cdot s^2/m^2}$ (force per velocity-squared).
+The total hydrodynamic forces become:
+\begin{align}
+  D &= (K_{D0} + K_D\,\alpha^2)\,V^2, \label{eq:Dlumped} \\
+  L &= (K_{L0} + K_L\,\alpha)\,V^2. \label{eq:Llumped}
+\end{align}
+
+\note{$\half\rho\,S = \half\times1023\times0.030 = 15.345\;\text{N}\cdot\text{s}^2/\text{m}^4$.
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+$K_{D0}$ & $15.345\times0.0706 = \mathbf{1.083}$ \\
+$K_D$    & $15.345\times1.633 = \mathbf{25.06}$ \\
+$K_{L0}$ & $15.345\times0.150 = \mathbf{2.302}$ \\
+$K_L$    & $15.345\times5.115 = \mathbf{78.49}$ \\
+\bottomrule
+\end{tabular}
+\end{center}}
+
+
+%----------------------------------------------------------------------
+\section{Reynolds number regime}
+\label{sec:reynolds}
+%----------------------------------------------------------------------
+
+The Reynolds number governs the character of the flow over the wing:
+\begin{equation}
+  \mathrm{Re}_c = \frac{V\,c}{\nu},
+  \label{eq:Re}
+\end{equation}
+where $c$ is the chord length and $\nu$ is the kinematic viscosity.
+
+\subsection{Temperature dependence of viscosity}
+
+Seawater viscosity decreases with temperature.  This is significant because
+\seamoth{} operates in warm Gulf water:
+
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Environment & $T$ [\textdegree C] & $\nu$ [$\times10^{-6}\;\text{m}^2/\text{s}$] \\
+\midrule
+North Atlantic (Slocum) & 10--15 & 1.14--1.35 \\
+Arabian Gulf (SEAMOTH) & 25--35 & 0.76--0.93 \\
+Design point (28\textdegree C) & 28 & 0.88 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The 30\% reduction in viscosity means that, at the same speed, \seamoth{}'s wings
+operate at 30\% higher Reynolds number than a glider in cold water.  This pushes us
+deeper into the SD7003's effective zone and away from the laminar-separation-bubble
+(LSB) danger region below Re\,30k.
+
+\note{At $V=0.53$\,m/s (design point, $\xi=15°$, $m_0=120$\,mL): $\mathrm{Re}_c = 0.53\times0.071/0.88\times10^{-6} = 42{,}800$.  Safely in the SD7003's optimal range.}
+
+\subsection{Laminar separation bubbles}
+
+Below $\mathrm{Re}\approx30{,}000$, the laminar boundary layer on the suction side
+of the airfoil separates before transitioning to turbulence.  A ``bubble'' of
+recirculating flow forms, dramatically increasing drag and often reducing lift.  This
+sets a practical minimum speed:
+\begin{equation}
+  V_\text{min} = \frac{\mathrm{Re}_\text{min}\times\nu}{c}
+  = \frac{30{,}000\times0.88\times10^{-6}}{0.071}
+  = 0.37\;\text{m/s}.
+\end{equation}
+
+The buoyancy engine should always maintain enough ballast to exceed this speed.
+At $\xi=15°$, the minimum ballast for $V>0.37$\,m/s is approximately 60\,mL.
+
+
+%======================================================================
+%  PART III: STEADY-STATE ANALYSIS
+%======================================================================
+\part{Steady-State Glide Analysis}
+
+%----------------------------------------------------------------------
+\section{The longitudinal (vertical plane) model}
+\label{sec:longitudinal}
+%----------------------------------------------------------------------
+
+For most analysis, we restrict the glider to the vertical plane:
+$\beta=0$ (no sideslip), $\phi=0$ (no roll), and all lateral velocities and
+angular rates are zero.  This is the \textbf{longitudinal model} (G-\S4.1).
+
+The remaining states are:
+\begin{itemize}[nosep]
+  \item Position: depth $z$ and horizontal distance $x$.
+  \item Velocity: $V$ (speed through the water) and $\xi$ (glide-path angle).
+  \item Attitude: pitch $\theta=\xi+\alpha$.
+  \item Internal: movable mass position $r_{p1}$ (or VBC bladder state) and ballast $m_0$.
+\end{itemize}
+
+\subsection{Equations of motion in the vertical plane}
+
+At steady state (constant $V$, $\xi$, $\alpha$), all accelerations vanish and the
+equations of motion reduce to a force balance (G-\S4.1.2).  Resolving forces along
+the velocity vector ($w_1$ axis) and perpendicular to it ($w_3$ axis):
+
+\paragraph{Along the velocity:}
+\begin{equation}
+  -D - m_0\,g\,\sin\xi = 0
+  \quad\Rightarrow\quad
+  D = -m_0\,g\,\sin\xi.
+  \label{eq:force_along}
+\end{equation}
+
+For a downward glide ($\xi<0$ in Graver's convention), $\sin\xi<0$ so the right side
+is positive---gravity overcomes drag.
+
+\paragraph{Perpendicular to the velocity:}
+\begin{equation}
+  L - m_0\,g\,\cos\xi = 0
+  \quad\Rightarrow\quad
+  L = m_0\,g\,\cos\xi.
+  \label{eq:force_perp}
+\end{equation}
+
+Lift supports the ``sideways'' component of the net weight.
+
+Dividing Eq.\,\eqref{eq:force_along} by Eq.\,\eqref{eq:force_perp}:
+\begin{equation}
+  \boxed{\frac{D}{L} = -\tan\xi}
+  \label{eq:DoverL}
+\end{equation}
+
+This is the fundamental glide relation: the tangent of the glide angle equals the
+drag-to-lift ratio.  A glider with $L/D=3.73$ glides at
+$\xi=\arctan(1/3.73)=15.0°$.
+
+\insight{This equation is identical for sailplanes and underwater gliders---it's
+pure geometry.  The difference is that a sailplane's $L/D$ is typically 30--60
+(shallow glide), while an underwater glider's $L/D$ is 2--6 (steep glide).  The
+underwater glider's high drag comes from the bluff hull, which a sailplane doesn't have.}
+
+
+%----------------------------------------------------------------------
+\section{Equilibrium glide: solving for $\alpha$ and $V$}
+\label{sec:equilibrium}
+%----------------------------------------------------------------------
+
+\subsection{Solving for $\alpha_d$}
+
+Substituting the lumped force expressions (Eqs.\,\ref{eq:Dlumped}--\ref{eq:Llumped})
+into the force balance:
+\begin{align}
+  (K_{D0} + K_D\alpha^2)\,V^2 &= -m_0\,g\sin\xi, \label{eq:fb1} \\
+  (K_{L0} + K_L\alpha)\,V^2 &= m_0\,g\cos\xi. \label{eq:fb2}
+\end{align}
+
+Dividing to eliminate $V^2$:
+\begin{equation}
+  \frac{K_{D0} + K_D\alpha^2}{K_{L0} + K_L\alpha} = -\tan\xi.
+  \label{eq:alphabalance}
+\end{equation}
+
+Rearranging into a quadratic in $\alpha$ (G-Eq.\,4.21):
+\begin{equation}
+  K_D\,\alpha^2 - K_L\tan\xi\;\alpha + (K_{D0} - K_{L0}\tan\xi) = 0.
+  \label{eq:alphaquad}
+\end{equation}
+
+Applying the quadratic formula and selecting the physically meaningful root
+(small, positive $\alpha$):
+\begin{equation}
+  \boxed{
+    \alpha_d = \frac{K_L}{2\,K_D}\,\tan\xi\;
+    \left(-1 + \sqrt{1 - \frac{4\,K_D}{K_L^2}\,\cot\xi\,(K_{D0}\cot\xi + K_{L0})}\right)
+  }
+  \label{eq:alpha_d}
+\end{equation}
+
+where $\xi$ carries Graver's sign convention (negative for downward glides).
+
+\note{Numerical evaluation at $\xi=15°$ (Graver: $\xi=-15°$):
+\begin{align*}
+  \tan\xi &= -0.2679, \quad \cot\xi = -3.732 \\
+  \text{disc.} &= 1 - \frac{4\times25.06}{78.49^2}\times(-3.732)\times(1.083\times(-3.732)+2.302) \\
+  &= 1 - 0.01625\times(-3.732)\times(-1.739) \\
+  &= 1 - 0.1054 = 0.8946 \\
+  \alpha_d &= \frac{78.49}{2\times25.06}\times(-0.2679)\times(-1+\sqrt{0.8946}) \\
+  &= 1.566\times(-0.2679)\times(-0.0543) \\
+  &= 0.0228\;\text{rad} = \mathbf{1.3°} \quad\checkmark
+\end{align*}}
+
+\subsection{Solving for equilibrium speed $V$}
+
+From Eq.\,\eqref{eq:fb2}:
+\begin{equation}
+  \boxed{
+    V = \sqrt{\frac{m_0\,g}
+    {\sin|\xi|\,(K_{D0}+K_D\alpha_d^2) + \cos|\xi|\,(K_{L0}+K_L\alpha_d)}}
+  }
+  \label{eq:Vequil}
+\end{equation}
+
+(Using $|\xi|$ and positive sign because we've already accounted for the direction
+in the derivation.)
+
+\insight{The speed equation reveals the two design levers:\\
+\textbf{Numerator:} $m_0\,g$ is the net gravitational force.  More ballast $\rightarrow$ faster.
+Speed scales as $\sqrt{m_0}$.\\
+\textbf{Denominator:} the total hydrodynamic resistance.  Less drag $\rightarrow$ faster, but
+also less lift $\rightarrow$ changes the equilibrium $\alpha$.}
+
+\note{At $\xi=15°$, $\alpha_d=0.0228$\,rad, $m_0=0.120$\,kg:
+\begin{align*}
+  \text{drag term} &= \sin15°\times(1.083+25.06\times0.0228^2) = 0.2588\times1.096 = 0.284 \\
+  \text{lift term} &= \cos15°\times(2.302+78.49\times0.0228) = 0.9659\times4.091 = 3.952 \\
+  V &= \sqrt{0.120\times9.81/(0.284+3.952)} = \sqrt{1.177/4.236} = \sqrt{0.278} = \mathbf{0.527}\;\text{m/s} \quad\checkmark
+\end{align*}}
+
+
+%----------------------------------------------------------------------
+\section{The complete equilibrium performance map}
+\label{sec:perfmap}
+%----------------------------------------------------------------------
+
+Combining the equilibrium equations, we can tabulate performance across the full
+operating envelope.  The horizontal speed is $V_h = V\cos\xi$.
+
+\begin{table}[H]
+\centering
+\caption{Corrected steady glide equilibria for \seamoth{} v1 at $m_0=120$\,mL.}
+\label{tab:equil}
+\begin{tabular}{@{}r r r r r r r@{}}
+\toprule
+$\xi$ [°] & $\alpha_d$ [°] & $L/D$ & $V$ [m/s] & $V_h$ [m/s] & $V_z$ [m/s] & Re$_c$ \\
+\midrule
+10 & 3.1 & 5.67 & 0.42 & 0.41 & 0.07 & 33\,900 \\
+12 & 2.2 & 4.70 & 0.47 & 0.46 & 0.10 & 37\,700 \\
+15 & 1.3 & 3.73 & 0.53 & 0.51 & 0.14 & 42\,500 \\
+18 & 0.8 & 3.08 & 0.58 & 0.55 & 0.18 & 46\,600 \\
+20 & 0.5 & 2.75 & 0.61 & 0.57 & 0.21 & 49\,100 \\
+25 & 0.0 & 2.14 & 0.68 & 0.61 & 0.29 & 54\,700 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Speed at $\xi=15°$ for different ballast levels.}
+\label{tab:speedballast}
+\begin{tabular}{@{}r r r r@{}}
+\toprule
+$m_0$ [mL] & $m_0$ [kg] & $V$ [m/s] & $V_h$ [m/s] \\
+\midrule
+40  & 0.040 & 0.30 & 0.29 \\
+80  & 0.080 & 0.43 & 0.42 \\
+120 & 0.120 & 0.53 & 0.51 \\
+160 & 0.160 & 0.61 & 0.59 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Key observations.}
+\begin{enumerate}[nosep]
+  \item \textbf{Horizontal speed peaks at $\xi\approx20$--$25°$}, not $15°$ as
+    previously stated.  The earlier spec had wrong coefficients that shifted the peak.
+  \item \textbf{To reach $V_h>0.6$\,m/s} at $\xi=15°$, we need $m_0>180$\,mL---beyond
+    our current buoyancy engine.  Options: steeper glide angle (20°, 0.57\,m/s at 120\,mL),
+    or increase max ballast to 200+\,mL.
+  \item \textbf{The SD7003 is never close to stall.}  Even at $\xi=10°$, $\alpha$
+    is only 3.1°---well below the 8° stall angle.  This means we have substantial margin,
+    and the MPC doesn't need an aggressive $\alpha$ limiter.
+  \item \textbf{Re is above 30k for all operating points} except $m_0<50$\,mL at shallow
+    angles.  The LSB risk is low in normal operation.
+\end{enumerate}
+
+
+%----------------------------------------------------------------------
+\section{Stability of equilibrium glides}
+\label{sec:stability}
+%----------------------------------------------------------------------
+
+Finding an equilibrium is only useful if the equilibrium is \emph{stable}---if the
+glider naturally returns to the equilibrium after a disturbance.  Graver analyses
+stability by linearizing the equations of motion around the equilibrium point
+(G-\S4.1.3--4.1.5).
+
+\subsection{Linearization}
+
+Define small perturbations from the equilibrium: $\delta V = V - V_d$,
+$\delta\xi = \xi - \xi_d$, $\delta\alpha = \alpha - \alpha_d$.  Graver shows that
+the linearized longitudinal dynamics have the form:
+\begin{equation}
+  \dot{\vect{x}} = \mat{A}\,\vect{x} + \mat{B}\,\vect{u},
+  \label{eq:linear}
+\end{equation}
+where $\vect{x}$ contains the perturbation states and $\mat{A}$ is the system matrix
+whose eigenvalues determine stability.
+
+\subsection{Static stability}
+
+For \emph{static} stability (the initial tendency to return to equilibrium),
+two conditions must be met:
+
+\paragraph{Speed stability.}
+If the glider is perturbed to a higher speed, drag should increase more than the
+driving force decreases.  This is automatically satisfied when the drag polar has
+$C_{D\alpha}>0$ (drag increases with $|\alpha|$), which is always true.
+
+\paragraph{Pitch stability.}
+If the glider pitches nose-up (increasing $\alpha$), a restoring nose-down moment
+must develop.  This requires:
+\begin{equation}
+  C_{M\alpha} < 0
+  \quad\text{and}\quad
+  \frac{\partial M}{\partial\alpha} < 0,
+  \label{eq:pitchstab}
+\end{equation}
+i.e., the aerodynamic centre must be \emph{behind} the centre of gravity.
+
+\insight{This is the same stability criterion as for aircraft: aft CG $=$ stable.
+For \seamoth{}, the wing is mounted at 55--65\% of body length from the nose.
+Combined with the tail, this places the neutral point well behind the CG, giving
+a positive \emph{static margin}.  The exact value depends on the hull's
+destabilizing moment contribution and must be determined in CFD or tow-tank tests.}
+
+\subsection{Dynamic stability}
+
+The linearized system has characteristic modes analogous to aircraft:
+
+\begin{description}[nosep]
+  \item[Short period mode:] A fast, well-damped oscillation in $\alpha$ and pitch rate.
+    This is stabilized by pitch damping ($C_{M_q}$, the pitch moment due to pitch rate)
+    and is generally well-behaved for underwater gliders.
+  \item[Phugoid mode:] A slow oscillation trading speed for altitude.  Graver analyses
+    this in detail (G-\S4.2), adapting Lanchester's classical phugoid theory to underwater
+    gliders.
+\end{description}
+
+\subsection{The phugoid mode for underwater gliders}
+\label{sec:phugoid}
+
+The phugoid is a long-period oscillation where the glider trades kinetic energy for
+potential energy (like a roller-coaster).  For aircraft, the phugoid is lightly damped
+and has period $T_p = \pi V_0\sqrt{2}/g$.
+
+For underwater gliders, the phugoid is \emph{qualitatively different} from aircraft
+(G-\S4.2).  The key differences:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Buoyancy matters.}  In air, the aircraft weight is constant.  In water,
+    the net driving force is $m_0\,g$, which is much smaller than $m_v\,g$ (since
+    $m_0/m_v \approx 2\%$).  This makes the phugoid frequency much lower.
+  \item \textbf{Added mass matters.}  The effective inertia of the glider includes
+    the added mass of the surrounding water ($m_f$), increasing the effective mass
+    by 10--30\%.  This further reduces the phugoid frequency.
+  \item \textbf{$\alpha\neq0$ changes the dynamics.}  Graver shows (G-\S4.2.2) that
+    nonzero equilibrium $\alpha$ breaks the symmetry of the phugoid phase portrait
+    and can improve damping.
+\end{enumerate}
+
+\insight{For \seamoth{}, the phugoid is not a major concern.  Our dive depths are
+only 5--30\,m, which is comparable to or shorter than one phugoid wavelength.  The
+MPC will actively control through any phugoid oscillations rather than relying on
+open-loop stability.  However, understanding the phugoid tells us the natural
+timescale of speed/depth oscillations---this sets the minimum control bandwidth
+the MPC must achieve.}
+
+
+%----------------------------------------------------------------------
+\section{Sawtooth gliding and inflections}
+\label{sec:sawtooth}
+%----------------------------------------------------------------------
+
+Real glider operation involves repeated dive--climb cycles (``sawtooth'' pattern).
+At the bottom and top of each sawtooth, the glider must \textbf{inflect}: reverse
+its buoyancy and transition from downward to upward glide (or vice versa).
+
+\subsection{The inflection problem}
+
+During an inflection (G-\S4.1.6, \S6.1.5):
+\begin{enumerate}[nosep]
+  \item The pump reverses the ballast: $m_0$ goes from positive to negative.
+  \item The pitch must reverse: from nose-down to nose-up.
+  \item The speed may drop significantly if the transition is slow.
+  \item The glider briefly passes through zero speed---where hydrodynamic control
+    authority vanishes.
+\end{enumerate}
+
+The inflection is the most dynamic and challenging part of the flight.  Graver
+simulates this and shows that with proper control, the transition can be smooth
+(G-Fig.\,4.6--4.8).
+
+\subsection{Inflection time for \seamoth{}}
+
+The inflection time is set by two factors:
+
+\paragraph{Pump time.}
+To reverse from $m_0=+120$\,mL to $m_0=-120$\,mL requires pumping 240\,mL of oil.
+At 500\,mL/min loaded flow: $t_\text{pump} = 240/500\times60 = 28.8$\,s.
+
+\paragraph{Pitch transition.}
+With VBC, the pitch moment depends on the pressure differential between forward and aft
+bladders.  The moment arm is roughly half the hull length ($\sim$0.35\,m), and the
+restoring force is the buoyancy differential.  A rough estimate: with 40\,mL differential
+(20\,mL extra forward, 20\,mL less aft), the restoring force is $0.040\times9.81\approx0.4$\,N
+at 0.35\,m arm $= 0.14\;\text{N}\cdot\text{m}$ of pitch moment.
+
+Against a pitch inertia of $I_\theta\approx0.3\;\text{kg}\cdot\text{m}^2$ (estimated),
+the angular acceleration is $\sim$0.47\,rad/s$^2$ $\approx$ 27°/s$^2$.  A 30° pitch
+reversal thus takes $\sim$1.5\,s.
+
+The total inflection time is dominated by the pump: $\sim$30\,s.  This is consistent
+with the 3--7\,s estimate in the spec only if a dual-pump configuration is used.
+With a single pump, expect 25--35\,s inflections.
+
+
+%======================================================================
+%  PART IV: THREE-DIMENSIONAL MOTION
+%======================================================================
+\part{Three-Dimensional Motion}
+
+%----------------------------------------------------------------------
+\section{Turning}
+\label{sec:turning}
+%----------------------------------------------------------------------
+
+An underwater glider turns by \emph{banking}: rolling to one side so that the
+lift vector has a horizontal component.  This is identical to how aircraft turn.
+
+\subsection{The turning mechanism}
+
+In conventional gliders (Slocum, Seaglider), roll is induced by laterally shifting
+the internal sliding mass or by using a rudder.  In \seamoth{}, roll is induced by
+differential bladder inflation (port vs.\ starboard), which shifts the centre of
+buoyancy laterally.
+
+Once banked at roll angle $\phi$, the horizontal component of lift provides the
+centripetal force for turning:
+\begin{equation}
+  L\sin\phi = \frac{m_v\,V^2}{R},
+  \label{eq:turn}
+\end{equation}
+where $R$ is the turn radius.  Solving:
+\begin{equation}
+  R = \frac{m_v\,V^2}{L\sin\phi}.
+  \label{eq:turnrad}
+\end{equation}
+
+\note{At $V=0.53$\,m/s, $\phi=30°$, $L\approx m_0 g/\cos\xi = 0.120\times9.81/\cos15° = 1.22$\,N:
+\[R = \frac{8.5\times0.53^2}{1.22\times\sin30°} = \frac{2.39}{0.61} = 3.9\;\text{m}.\]
+This meets the $<$5\,m turning radius target.  More aggressive banking (45°) gives $R\approx2.8$\,m.}
+
+\subsection{Roll--yaw coupling}
+\label{sec:rollyaw}
+
+An important subtlety (G-\S4.3.5): rolling the glider also creates a yaw moment.
+This happens because rolling changes the angle of attack differently on the two wings
+(the ``inside'' wing sees higher effective $\alpha$ than the ``outside'' wing during
+the roll maneuver), creating differential drag and thus a yaw moment.
+
+For \seamoth{}, the wing position relative to the CG determines whether this coupling
+is \emph{proverse} (yaw in the desired turn direction) or \emph{adverse} (yaw opposing
+the turn).  Wings behind the CG give proverse coupling; wings ahead give adverse.
+Our wing is at 55--65\% from the nose---likely slightly aft of CG, which is favorable.
+
+\subsection{Spiral glides}
+
+A glider can fly a steady turning descent (or ascent) called a \textbf{spiral glide}
+(G-\S4.3.2).  This is a useful survey pattern: the glider descends in a helix,
+imaging the reef from multiple angles.
+
+The equilibrium spiral combines straight-glide equations with the turning
+equation.  Graver derives the full 3D equilibrium conditions (G-\S4.3.1--4.3.2)
+and shows that spiral glides exist over a range of bank angles and glide angles.
+
+\note{For reef survey, a descending spiral at $\xi=15°$, $\phi=20°$, $V=0.53$\,m/s
+gives: turn radius $\approx5.8$\,m, vertical descent rate $\approx0.14$\,m/s,
+circumference $\approx36$\,m, time per revolution $\approx68$\,s.  In a 15\,m dive,
+the glider completes $\sim$1.6 revolutions---enough for useful photogrammetric coverage
+of a coral bommie.}
+
+
+%======================================================================
+%  PART V: DESIGN EQUATIONS
+%======================================================================
+\part{Design Equations}
+
+%----------------------------------------------------------------------
+\section{Speed, ballast, and energy}
+\label{sec:design}
+%----------------------------------------------------------------------
+
+Graver Chapter~7 applies the equilibrium equations to analyse how design parameters
+affect glider performance.  This is the most directly useful section for \seamoth{}
+sizing.
+
+\subsection{Speed vs.\ ballast: the $\sqrt{m_0}$ law}
+
+From Eq.\,\eqref{eq:Vequil}, at fixed $\xi$ and $\alpha_d$:
+\begin{equation}
+  V \propto \sqrt{m_0}.
+  \label{eq:Vsqrt}
+\end{equation}
+
+Doubling the ballast increases speed by $\sqrt{2}\approx41\%$.  This is confirmed
+by Table~\ref{tab:speedballast}: $V(160)/V(80) = 0.61/0.43 = 1.42$.
+
+\subsection{Speed vs.\ vehicle size: the $\sqrt{m_v\beta}$ law}
+
+For a family of geometrically similar vehicles with ballast fraction $\beta=m_0/m_v$
+(G-\S7.2.3):
+\begin{equation}
+  V \propto \sqrt{m_v\,\beta}.
+  \label{eq:Vscale}
+\end{equation}
+
+A larger vehicle with the same $\beta$ goes faster simply because it has more ballast.
+This is why the 990\,kg STERNE glider achieves 1.3\,m/s while the 52\,kg Slocum achieves
+0.4\,m/s, despite similar $\beta$.
+
+\subsection{Ballast fraction comparison}
+
+\begin{table}[H]
+\centering
+\caption{Ballast fraction and speed for existing gliders.}
+\begin{tabular}{@{}l c c c c@{}}
+\toprule
+Vehicle & $m_v$ [kg] & $\beta$ [\%] & $V$ [m/s] & Mission \\
+\midrule
+Seaglider & 52 & 0.8 & 0.25 & Trans-ocean \\
+Slocum Electric & 52 & 1.5 & 0.40 & Coastal \\
+STERNE & 990 & 1.2 & 1.30 & Near-seabed survey \\
+\seamoth{} v1 & 8.5 & 1.88 & 0.5--0.6 & Reef survey \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\seamoth{}'s higher $\beta$ compensates for its small size.  We intentionally
+sacrifice endurance (more pumping energy per unit distance) for speed, because
+reef survey requires covering area quickly during daylight hours.
+
+\subsection{Optimal glide angle for maximum horizontal speed}
+
+The horizontal speed is $V_h = V\cos\xi$.  From Eq.\,\eqref{eq:Vequil},
+$V$ increases with $|\xi|$ (steeper $=$ faster) but $\cos\xi$ decreases.  The
+product $V_h$ has a maximum at some optimal $\xi^*$.
+
+Graver shows (G-\S7.2.2) that this optimal angle depends on the drag polar but
+is typically in the range 15--25° for conventional gliders.  For \seamoth{}, the
+corrected equilibrium table shows $V_h$ peaks around $\xi\approx20$--$25°$.
+
+\insight{The original spec targeted $\xi=15°$ based on incorrect coefficients.
+With the corrected hull drag, the optimal angle shifts to $\sim$20°.  This is
+actually \emph{good news} for reef survey: steeper angles mean more vertical
+coverage per horizontal distance, which improves photogrammetric overlap.  The
+trade-off is that you reach the bottom sooner and need more inflections per
+kilometer of horizontal distance.}
+
+
+%----------------------------------------------------------------------
+\section{Energy and endurance}
+\label{sec:energy}
+%----------------------------------------------------------------------
+
+\subsection{Pump energy per cycle}
+
+Each dive--climb cycle requires reversing the buoyancy.  The pump moves a volume
+$\Delta\mathcal{V} = 2m_0/\rho$ of oil against the hydrostatic pressure.
+Over a sawtooth dive to depth $d$, the average pressure is:
+\begin{equation}
+  \bar{P} = \frac{\rho\,g\,d}{2}.
+  \label{eq:Pavg}
+\end{equation}
+
+The mechanical work per cycle is:
+\begin{equation}
+  E_\text{mech} = \Delta\mathcal{V}\times\bar{P}
+  = \frac{2m_0}{\rho}\times\frac{\rho\,g\,d}{2}
+  = m_0\,g\,d.
+  \label{eq:Emech}
+\end{equation}
+
+\insight{The $\rho$ cancels!  The pump energy is exactly the potential energy of
+lifting mass $m_0$ through height $d$.  This is physically obvious in retrospect:
+the glider converts gravitational potential energy into kinetic energy of gliding;
+to reverse the cycle, you must put that energy back.}
+
+The electrical energy, accounting for pump efficiency:
+\begin{equation}
+  E_\text{elec} = \frac{E_\text{mech}}{\eta_\text{pump}}.
+  \label{eq:Eelec}
+\end{equation}
+
+\note{$m_0=0.120$\,kg, $d=15$\,m (average sawtooth depth to 30\,m),
+$\eta=0.45$:
+\begin{align*}
+  E_\text{mech} &= 0.120\times9.81\times15 = 17.7\;\text{J}, \\
+  E_\text{elec} &= 17.7/0.45 = 39.2\;\text{J} = 0.0109\;\text{Wh per cycle}.
+\end{align*}}
+
+\subsection{System power budget}
+
+The total average power consumption:
+\begin{equation}
+  P_\text{total} = P_\text{hotel} + P_\text{pump,avg} + P_\text{SBC,avg},
+  \label{eq:Ptotal}
+\end{equation}
+where:
+\begin{itemize}[nosep]
+  \item $P_\text{hotel}$: always-on loads (H755 + sensors) $\approx 0.8$\,W.
+  \item $P_\text{pump,avg} = E_\text{elec}\times f_\text{cycles}$: pump energy $\times$
+    cycling frequency.  At 6 cycles/hr: $P_\text{pump}=39.2\times6/3600=0.065$\,W.
+  \item $P_\text{SBC,avg} = P_\text{active}\times\delta + P_\text{sleep}\times(1-\delta)$:
+    Jetson duty-cycled.  At $\delta=8\%$: $P_\text{SBC}=7.0\times0.08+0.3\times0.92=0.84$\,W.
+\end{itemize}
+
+\note{$P_\text{total} = 0.8 + 0.065 + 0.84 \approx 1.7$\,W.  This is lower than the
+2.4\,W in the spec because the corrected coefficients give lower speeds (less pump work)
+and we're using a more careful power breakdown.  The spec's 2.4\,W included valve power
+and DC-DC losses that should still be added for the full system.  With those:
+$P_\text{total}\approx2.2$\,W.}
+
+\subsection{Endurance and range}
+
+\begin{equation}
+  T = \frac{E_\text{battery}}{P_\text{total}}, \qquad
+  R = V_h\times T.
+  \label{eq:endurance}
+\end{equation}
+
+\note{$E_\text{batt}=116$\,Wh, $P_\text{total}=2.2$\,W, $V_h=0.51$\,m/s:
+\begin{align*}
+  T &= 116/2.2 = 52.7\;\text{hours} \approx 2.2\;\text{days}, \\
+  R &= 0.51\times52.7\times3.6 = 97\;\text{km}.
+\end{align*}
+Active survey at 30\% Jetson duty: $P\approx3.5$\,W, $T\approx33$\,h, $R\approx61$\,km.}
+
+
+%----------------------------------------------------------------------
+\section{Wing sizing considerations}
+\label{sec:wingsizing}
+%----------------------------------------------------------------------
+
+Graver analyses the effect of wing area on L/D (G-\S7.3, Fig.\,7.5).  The key
+trade-off:
+
+\begin{itemize}[nosep]
+  \item \textbf{Larger wing:} more lift per unit $\alpha$ $\rightarrow$ lower $\alpha$
+    at a given $\xi$ $\rightarrow$ lower induced drag.  But also more wetted area
+    $\rightarrow$ more profile drag.
+  \item \textbf{Smaller wing:} less profile drag but higher $\alpha$ $\rightarrow$
+    higher induced drag and potentially stall at steep angles.
+\end{itemize}
+
+For \seamoth{}, since induced drag is only 1\% of total, \emph{reducing wing area
+would actually reduce total drag} (less profile drag) with negligible increase in
+induced drag.  However, smaller wings reduce roll authority in the VBC scheme
+(less moment arm for lateral CB shift) and reduce the wing's contribution to pitch
+stability.
+
+Our 300\,cm$^2$ wing area is a reasonable compromise.  Sensitivity analysis in the
+notebook shows that L/D varies only 5--10\% over the range 200--400\,cm$^2$.
+
+
+%======================================================================
+%  PART VI: PARAMETER IDENTIFICATION
+%======================================================================
+\part{Parameter Identification}
+
+%----------------------------------------------------------------------
+\section{What to measure in pool tests}
+\label{sec:paramid}
+%----------------------------------------------------------------------
+
+Graver Chapter~5 describes how to identify hydrodynamic coefficients from flight
+data.  The basic method:
+
+\subsection{Steady glide method}
+
+\begin{enumerate}[nosep]
+  \item Fly the glider at several known $m_0$ values.
+  \item At each $m_0$, let the glider reach steady state and measure:
+    \begin{itemize}[nosep]
+      \item Pitch angle $\theta$ (from IMU).
+      \item Depth rate $\dot{z}$ (from depth sensor differentiation).
+      \item Speed $V$ (from depth rate and pitch: $V=\dot{z}/\sin\xi$,
+        or better, from a DVL if available).
+    \end{itemize}
+  \item Compute $\xi = \arctan(\dot{z}/\dot{x})$ and $\alpha = \theta - \xi$.
+  \item From Eq.\,\eqref{eq:DoverL}: $D/L = -\tan\xi$ gives the drag-to-lift ratio
+    at each $\alpha$.
+  \item From Eq.\,\eqref{eq:Vequil}: knowing $V$, $\xi$, and $m_0$, solve for
+    the $K$ parameters.
+  \item Fit the coefficient model ($C_{D0}$, $C_{D\alpha}$, $C_{L0}$, $C_{L\alpha}$)
+    to the data.
+\end{enumerate}
+
+\warning{The main difficulty is measuring speed $V$ accurately.  Without a DVL,
+$V$ must be inferred from $\dot{z}$ and $\theta$, which requires accurate pitch
+measurement and the assumption of steady state.  In pool tests with GPS-denied
+conditions, video tracking from above may be the most practical speed measurement.}
+
+\subsection{What pool tests will tell us}
+
+\begin{enumerate}[nosep]
+  \item \textbf{True $C_{D0}$:} Our estimate of 0.071 is based on component buildup.
+    Real vehicles always have higher drag than predicted (cables, connectors, imperfect
+    fairing, hull roughness).  Expect 10--30\% higher: $C_{D0}\approx0.08$--$0.09$.
+  \item \textbf{True neutral buoyancy trim:} Even small trim errors ($\pm$5\,g) affect
+    the equilibrium.  The pool test calibrates the relationship between pump command and
+    actual $m_0$.
+  \item \textbf{Inflection dynamics:} How fast can we actually reverse pitch?  What is
+    the speed loss during inflection?
+  \item \textbf{VBC effectiveness:} How much differential bladder inflation is needed for
+    a given pitch/roll rate?
+  \item \textbf{Turn performance:} Actual turn radius vs.\ bank angle.
+\end{enumerate}
+
+
+%----------------------------------------------------------------------
+\section{How to read Graver's dissertation}
+\label{sec:readingguide}
+%----------------------------------------------------------------------
+
+If you want to go deeper into specific topics beyond this document, here is a
+prioritized reading guide:
+
+\begin{table}[H]
+\centering
+\caption{Reading guide for Graver (2005), prioritized for \seamoth{}.}
+\small
+\begin{tabular}{@{}clp{6.5cm}c@{}}
+\toprule
+Priority & Graver section & What it covers & Pages \\
+\midrule
+1 & \S4.1 (pp.\,86--110) & Longitudinal equilibria, stability, sawtooth sim & 24 \\
+2 & \S7.1--7.3 (pp.\,224--243) & Gliders vs sailplanes, speed/sizing equations & 19 \\
+3 & \S3.2.7 (pp.\,82--85) & Hydrodynamic force model & 4 \\
+4 & \S5.1--5.2 (pp.\,147--177) & Slocum model and parameter ID from sea data & 30 \\
+5 & \S4.3 (pp.\,125--144) & 3D gliding, spirals, turning, roll-yaw & 19 \\
+6 & \S4.2 (pp.\,110--121) & Phugoid mode analysis & 11 \\
+7 & \S6.1 (pp.\,181--196) & Controller design (linear observer/controller) & 15 \\
+\midrule
+& & \textbf{Total for priorities 1--5} & \textbf{96 pages} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Skip entirely:} Chapter~1 (intro), Chapter~2 (history---interesting but
+not technical), \S3.1 (kinematics---covered here), \S3.2.1--3.2.6 (detailed EOM
+derivation---important but you can trust the results), \S6.2--6.4 (Slocum-specific
+control), \S7.4 (flying wing designs), Chapter~8 (conclusions), Appendix.
+
+
+%======================================================================
+\section*{Summary}
+%======================================================================
+
+The five equations that govern \seamoth{}'s steady-state flight:
+
+\begin{enumerate}
+  \item \textbf{Glide ratio} (Eq.\,\ref{eq:DoverL}):
+    $D/L = -\tan\xi$.
+
+  \item \textbf{Equilibrium $\alpha$} (Eq.\,\ref{eq:alpha_d}):
+    quadratic in $\alpha$ from the force balance; gives $\alpha_d=1.3°$ at $\xi=15°$.
+
+  \item \textbf{Equilibrium speed} (Eq.\,\ref{eq:Vequil}):
+    $V=\sqrt{m_0 g/\text{(hydro resistance)}}$; gives $V=0.53$\,m/s at 120\,mL.
+
+  \item \textbf{Pump energy} (Eq.\,\ref{eq:Emech}):
+    $E=m_0 g d$; gives 17.7\,J mechanical per cycle.
+
+  \item \textbf{Endurance} (Eq.\,\ref{eq:endurance}):
+    $T=E_\text{batt}/P_\text{total}$; gives $\sim$53\,h continuous.
+\end{enumerate}
+
+Everything in the Jupyter notebook is a numerical evaluation of these five equations
+with \seamoth{} parameters.
+
+\vspace{1em}\hrule\vspace{1em}
+
+\section*{References}
+\begin{enumerate}[label={[\arabic*]},nosep]
+  \item J.\,G.\ Graver, \emph{Underwater Gliders: Dynamics, Control and Design},
+    Ph.D.\ dissertation, Princeton University, 2005.
+    \url{https://naomi.princeton.edu/wp-content/uploads/sites/744/2021/03/jggraver-thesis-4-11-05.pdf}
+  \item S.\,Selig, J.\,Donovan, D.\,Fraser, \emph{Airfoils at Low Speeds}, Soartech~8, 1989.
+  \item K.\,Galloway et al., ``ReefGlider: A Vectored Buoyancy Controlled Underwater
+    Glider for Reef Survey,'' arXiv:2405.06033, 2024.
+  \item T.\,Fossen, \emph{Handbook of Marine Craft Hydrodynamics and Motion Control},
+    Wiley, 2011.
+  \item M.\,S.\ Triantafyllou and F.\,S.\ Hover, ``Maneuvering and Control of Marine
+    Vehicles,'' MIT OCW 2.154, 2004.
+\end{enumerate}
+
+\end{document}

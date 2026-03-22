@@ -31,7 +31,7 @@ Autonomous reef survey in warm shallow water. Silent operation (no thrusters). A
 
 | Parameter | Value |
 |---|---|
-| **Hull** | BlueRobotics 4″ WTE, 114.3 mm OD, ~100 mm ID |
+| **Hull** | BlueRobotics 4" WTE, 114.3 mm OD, ~100 mm ID |
 | **Body length** | ~700 mm (hull + nose + tail) |
 | **Total wingspan** | ~530 mm (body + 2 × 161 mm semi-span) |
 | **Mass (target)** | 8–10 kg, neutrally trimmed |
@@ -262,7 +262,7 @@ The H755 dual-core architecture enables hardware-level fault isolation. M4 acts 
 
 ## 6. Custom flight controller PCB
 
-Target board size: 90 × 60 mm. Fits flat inside 4″ hull (~95 mm usable width).
+Target board size: 90 × 60 mm. Fits flat inside 4" hull (~95 mm usable width).
 
 ### 6.1 Required interfaces
 
@@ -368,7 +368,7 @@ Target board size: 90 × 60 mm. Fits flat inside 4″ hull (~95 mm usable width)
 | Oil | [Shell Tellus S2 V 22](https://www.shell.com/business-customers/lubricants-for-business/shell-tellus) | 1 L | $10–30 |
 | Tubing | PTFE 3 mm ID / 5 mm OD | 2 m | $15–30 |
 | Check valve | 316 SS spring type | 1 | $15–40 |
-| Fill/bleed valve | 316 SS ball valve 1/8″ NPT | 1 | $10–20 |
+| Fill/bleed valve | 316 SS ball valve 1/8" NPT | 1 | $10–20 |
 | Oil bulkheads | [Swagelok SS-200-61](https://products.swagelok.com/en/c/straights/p/SS-200-61) | 4 | $100–140 |
 
 ### 9.2 Electronics & compute
@@ -392,7 +392,7 @@ Target board size: 90 × 60 mm. Fits flat inside 4″ hull (~95 mm usable width)
 
 | Part | Model | Qty | Est. cost |
 |---|---|---|---|
-| Hull tube | [BlueRobotics 4″ WTE 300mm](https://bluerobotics.com/store/watertight-enclosures/locking-series/wte-locking-tube-r1-vp/) | 1 | $40–60 |
+| Hull tube | [BlueRobotics 4" WTE 300mm](https://bluerobotics.com/store/watertight-enclosures/locking-series/wte-locking-tube-r1-vp/) | 1 | $40–60 |
 | End caps + flanges | [BlueRobotics aluminum](https://bluerobotics.com/store/watertight-enclosures/) | 2 | $80–120 |
 | Penetrators | [BlueRobotics WetLink M10](https://bluerobotics.com/store/cables-connectors/penetrators/wlp-vp/) | 6–8 | $80–136 |
 | Wings | SLA resin, SD7003, 71 mm chord | 2 | $30–60 |

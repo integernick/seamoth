@@ -1,37 +1,71 @@
-name: Generate PDF from Spec
+name: Export Documents
 
 on:
   push:
     paths:
-      - 'docs/requirements/src/VBC_GLIDER_v1_Spec.md'
+      - 'docs/VBC_GLIDER_v1_Spec.md'
+      - 'docs/seamoth_theory_full.tex'
 
 jobs:
-  build-pdf:
+  build-docs:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
 
-      - name: Install pandoc and LaTeX
+      - name: Detect changed sources
+        id: changed
+        run: |
+          echo "spec=$(git diff --name-only HEAD~1 HEAD | grep -q 'docs/VBC_GLIDER_v1_Spec.md' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "theory=$(git diff --name-only HEAD~1 HEAD | grep -q 'docs/seamoth_theory_full.tex' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup pandoc
+        if: steps.changed.outputs.spec == 'true'
+        uses: pandoc/actions/setup@v1
+        with:
+          version: "3.1.13"
+
+      - name: Convert MD to DOCX
+        if: steps.changed.outputs.spec == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF_DOC="docs/VBC_GLIDER_v1_Spec.docx"
+          test -f "$REF_DOC" || (echo "Missing template: $REF_DOC" && exit 1)
+          mkdir -p docs/dist
+          pandoc docs/VBC_GLIDER_v1_Spec.md \
+            --from markdown \
+            --to docx \
+            --reference-doc "$REF_DOC" \
+            -o docs/dist/VBC_GLIDER_v1_Spec.docx
+
+      - name: Upload Spec DOCX
+        if: steps.changed.outputs.spec == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: VBC_GLIDER_v1_Spec
+          path: docs/dist/VBC_GLIDER_v1_Spec.docx
+
+      - name: Install LaTeX
+        if: steps.changed.outputs.theory == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pandoc texlive-latex-base texlive-latex-recommended texlive-fonts-recommended texlive-latex-extra
+          sudo apt-get install -y texlive-latex-base texlive-latex-recommended texlive-fonts-recommended texlive-latex-extra texlive-science
 
-      - name: Create output directory
-        run: mkdir -p docs/requirements/dist
-
-      - name: Convert MD to PDF
+      - name: Compile LaTeX to PDF
+        if: steps.changed.outputs.theory == 'true'
         run: |
-          pandoc docs/requirements/src/VBC_GLIDER_v1_Spec.md \
-            --from markdown \
-            --to pdf \
-            -o docs/requirements/dist/VBC_GLIDER_v1_Spec.pdf
+          mkdir -p docs/dist
+          cd docs
+          pdflatex -interaction=nonstopmode -output-directory=dist seamoth_theory_full.tex
+          pdflatex -interaction=nonstopmode -output-directory=dist seamoth_theory_full.tex
 
-      - name: Commit and push PDF
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/requirements/dist/VBC_GLIDER_v1_Spec.pdf
-          git diff --cached --quiet || git commit -m "chore: regenerate spec PDF"
-          git push
+      - name: Upload Theory PDF
+        if: steps.changed.outputs.theory == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: seamoth_theory_full
+          path: docs/dist/seamoth_theory_full.pdf
