@@ -1,0 +1,37 @@
+name: Generate PDF from Spec
+
+on:
+  push:
+    paths:
+      - 'docs/requirements/src/VBC_GLIDER_v1_Spec.md'
+
+jobs:
+  build-pdf:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pandoc and LaTeX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc texlive-latex-base texlive-latex-recommended texlive-fonts-recommended texlive-latex-extra
+
+      - name: Create output directory
+        run: mkdir -p docs/requirements/dist
+
+      - name: Convert MD to PDF
+        run: |
+          pandoc docs/requirements/src/VBC_GLIDER_v1_Spec.md \
+            --from markdown \
+            --to pdf \
+            -o docs/requirements/dist/VBC_GLIDER_v1_Spec.pdf
+
+      - name: Commit and push PDF
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/requirements/dist/VBC_GLIDER_v1_Spec.pdf
+          git diff --cached --quiet || git commit -m "chore: regenerate spec PDF"
+          git push
